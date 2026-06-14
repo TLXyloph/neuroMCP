@@ -16,7 +16,11 @@ import argparse
 import json
 import time
 import anthropic
+from dotenv import load_dotenv
 from ..server.server import get_signal_quality, get_brain_state, startup
+
+# Load ANTHROPIC_API_KEY (and any other vars) from a local .env if present.
+load_dotenv()
 
 FINDINGS = [
     "The authentication middleware doesn't validate JWT expiration. An expired token is accepted indefinitely.",
