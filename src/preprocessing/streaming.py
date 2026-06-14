@@ -51,7 +51,7 @@ class PipelineThread(threading.Thread):
         epoch_buffer: EpochBuffer,
         sfreq: float = 160.0,
         n_channels: int = 64,
-        peak_to_peak_uv: float = 100.0,
+        peak_to_peak_uv: float = 200.0,
     ) -> None:
         super().__init__(daemon=True)
         self._queue = sample_queue
