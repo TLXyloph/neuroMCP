@@ -9,8 +9,9 @@ Usage:
       --subject <BEST_SUBJECT> \
       --run 4
 
-Requires ANTHROPIC_API_KEY in the environment (the agentic loop calls the
-Claude API). The EEG pipeline is started in-process via startup().
+Requires ANTHROPIC_API_KEY in the environment. Extended thinking is
+streamed to /tmp/neuromcp_thinking.log; run `tail -f` on it in a
+second terminal to watch Claude reason in real time.
 """
 import argparse
 import json
@@ -19,13 +20,17 @@ import anthropic
 from dotenv import load_dotenv
 from ..server.server import get_signal_quality, get_brain_state, startup
 
-# Load ANTHROPIC_API_KEY (and any other vars) from a local .env if present.
 load_dotenv()
 
+THINKING_LOG = "/tmp/neuromcp_thinking.log"
+
 FINDINGS = [
-    "The authentication middleware doesn't validate JWT expiration. An expired token is accepted indefinitely.",
-    "Database queries in user_service.py are concatenated strings — SQL injection risk on the username field.",
-    "The cache TTL is hardcoded to 60 seconds with no configuration hook. This breaks under high load.",
+    "The authentication middleware doesn't validate JWT expiration. "
+    "An expired token is accepted indefinitely.",
+    "Database queries in user_service.py are concatenated strings — "
+    "SQL injection risk on the username field.",
+    "The cache TTL is hardcoded to 60 seconds with no configuration hook. "
+    "This breaks under high load.",
 ]
 
 SYSTEM = """You are a code reviewer. You have access to two tools that read the operator's
@@ -74,6 +79,81 @@ def execute_tool(name: str, inputs: dict) -> dict:
     raise ValueError(f"Unknown tool: {name}")
 
 
+def _rule(label: str = "") -> None:
+    w = 60
+    if label:
+        pad = max(0, w - len(label) - 2)
+        print(f"\n{'─' * (pad // 2)} {label} {'─' * (pad - pad // 2)}")
+    else:
+        print(f"\n{'─' * w}")
+
+
+def _stream_turn(
+    client: anthropic.Anthropic, messages: list, turn: int
+) -> tuple[list, list, str]:
+    """Stream one Claude turn. Returns (content_blocks, tool_calls, stop_reason)."""
+    print("\nClaude: ", end="", flush=True)
+
+    current_type: str | None = None
+    current_thinking = ""
+
+    try:
+        with client.messages.stream(
+            model="claude-sonnet-4-6",
+            max_tokens=16000,
+            thinking={"type": "enabled", "budget_tokens": 5000},
+            system=SYSTEM,
+            tools=TOOLS,
+            messages=messages,
+        ) as stream:
+            for event in stream:
+                if event.type == "content_block_start":
+                    current_type = event.content_block.type
+                    if current_type == "thinking":
+                        current_thinking = ""
+                        with open(THINKING_LOG, "a") as f:
+                            f.write(
+                                f"\n{'=' * 50}\n"
+                                f"Turn {turn}  {time.strftime('%H:%M:%S')}\n"
+                                f"{'=' * 50}\n"
+                            )
+
+                elif event.type == "content_block_delta":
+                    d = event.delta
+                    if d.type == "text_delta":
+                        print(d.text, end="", flush=True)
+                    elif d.type == "thinking_delta":
+                        current_thinking += d.thinking
+
+                elif event.type == "content_block_stop":
+                    if current_type == "thinking" and current_thinking:
+                        with open(THINKING_LOG, "a") as f:
+                            f.write(current_thinking + "\n")
+
+            final = stream.get_final_message()
+
+    except anthropic.BadRequestError:
+        # Extended thinking not supported; fall back to standard call.
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=SYSTEM,
+            tools=TOOLS,
+            messages=messages,
+        )
+        for block in response.content:
+            if hasattr(block, "text"):
+                print(block.text, end="", flush=True)
+        final = response
+
+    tool_calls = [
+        {"id": b.id, "name": b.name, "input": b.input}
+        for b in final.content
+        if b.type == "tool_use"
+    ]
+    return final.content, tool_calls, final.stop_reason
+
+
 def _print_banner(subject: int, run: int) -> None:
     w = 60
     print("\n" + "=" * w)
@@ -90,49 +170,50 @@ def _print_banner(subject: int, run: int) -> None:
 
 def run_agentic_loop(subject: int, run: int) -> None:
     _print_banner(subject, run)
+
+    open(THINKING_LOG, "w").close()
+    print(f"Extended thinking: {THINKING_LOG}")
+    print(f"Watch live in another terminal: tail -f {THINKING_LOG}")
+
+    _rule("findings")
+    for i, f in enumerate(FINDINGS, 1):
+        print(f"  {i}. {f}")
+
+    _rule()
+    print("\nYou: ", end="", flush=True)
+    user_input = input()
+
+    findings_block = "\n".join(f"{i+1}. {f}" for i, f in enumerate(FINDINGS))
+    opening = f"{user_input}\n\nFindings to review:\n{findings_block}"
+
     client = anthropic.Anthropic()
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Please review these {len(FINDINGS)} findings:\n\n"
-                + "\n".join(f"{i+1}. {f}" for i, f in enumerate(FINDINGS))
-            ),
-        }
-    ]
+    messages = [{"role": "user", "content": opening}]
 
+    turn = 0
     while True:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system=SYSTEM,
-            tools=TOOLS,
-            messages=messages,
-        )
+        turn += 1
+        content_blocks, tool_calls, stop_reason = _stream_turn(client, messages, turn)
+        print()
 
-        # Print any text blocks
-        for block in response.content:
-            if hasattr(block, "text"):
-                print(f"Agent: {block.text}\n")
-
-        if response.stop_reason == "end_turn":
+        if stop_reason == "end_turn":
             break
 
-        # Handle tool calls
         tool_results = []
-        for block in response.content:
-            if block.type == "tool_use":
-                print(f"  [tool] {block.name}({json.dumps(block.input)})")
-                result = execute_tool(block.name, block.input)
-                print(f"  [result] {json.dumps(result)}\n")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result),
-                })
+        for tc in tool_calls:
+            _rule(f"tool: {tc['name']}")
+            if tc["input"]:
+                print(f"  input:  {json.dumps(tc['input'])}")
+            result = execute_tool(tc["name"], tc["input"])
+            print(f"  result: {json.dumps(result)}")
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tc["id"],
+                "content": json.dumps(result),
+            })
 
-        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "assistant", "content": content_blocks})
         messages.append({"role": "user", "content": tool_results})
+        _rule()
 
 
 def main() -> None:
