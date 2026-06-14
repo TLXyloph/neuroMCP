@@ -1,37 +1,63 @@
 # NeuroMCP Demo Script
 
-Walk-through for recording the focus-gated code review demo.
-Recommended subject: **86**, run 4. Expected duration: 90–120 s.
+Word-for-word narration and actions for recording the focus-gated code review demo.
+Everything in **SAY:** is spoken out loud. Everything in **[ACTION]** is a physical step.
+Expected duration: 90-120 seconds.
 
 ---
 
-## Pre-Run Checklist
+## Before You Hit Record
 
-```
-[ ] checkpoints/eegnet.pt exists
-[ ] .env contains ANTHROPIC_API_KEY
-[ ] pip install -e ".[dev]"  completed
-[ ] terminal window ~120 cols wide, font >= 14pt (legible on recording)
-[ ] screen recorder running (e.g. QuickTime > New Screen Recording)
-```
+**[ACTION]** Open two terminal windows side by side. Left is the main demo. Right is the thinking log.
 
----
-
-## Step 1 — Start the Demo
-
+**[ACTION]** In the RIGHT terminal, run:
 ```bash
-python -m src.demo.agent \
-  --checkpoint checkpoints/eegnet.pt \
-  --subject 86 \
-  --run 4
+tail -f /tmp/neuromcp_thinking.log
+```
+It will say "no such file or directory" — that is fine. It starts showing output once the demo runs.
+
+**[ACTION]** In the LEFT terminal, navigate to the project root.
+
+**[ACTION]** Run once without recording to warm the cache:
+```bash
+python -m src.demo.agent --checkpoint checkpoints/eegnet.pt --subject 86 --run 4
+```
+Type anything at the `You:` prompt, wait for it to finish. This pre-downloads EEG data so the recording has no 30-second loading pause.
+
+**[ACTION]** Start your screen recorder. Make sure both terminal windows are in frame.
+
+---
+
+## The Recording
+
+### Opening (while the command is still being typed)
+
+**[ACTION]** Type the command slowly, visibly:
+```bash
+python -m src.demo.agent --checkpoint checkpoints/eegnet.pt --subject 86 --run 4
 ```
 
-**You should see:**
+**SAY:**
+> "This is NeuroMCP — an MCP server that gives AI agents a real-time read on your cognitive state. The idea is simple: before the agent says anything, it checks whether you're focused or at rest, and adapts what it surfaces accordingly."
 
+**[ACTION]** Press Enter.
+
+---
+
+### Pipeline Startup
+
+The terminal prints:
 ```
 Starting EEG pipeline...
 Waiting 3s for buffer to fill...
+```
 
+**SAY:**
+> "Under the hood, a streaming EEG pipeline is running — filtering the signal to 8 to 30 Hz, windowing it into one-second epochs, and feeding those into a calibrated EEGNet decoder. It takes a few seconds to fill the buffer."
+
+**[ACTION]** Let the banner print. Do not rush.
+
+```
 ============================================================
 NeuroMCP Demo — Focus-Gated Code Review
 Model : EEGNet + MC Dropout  (N=50 passes)
@@ -44,89 +70,143 @@ Brain states
 ============================================================
 ```
 
-**Talking point:**
-> "Before each code review finding the agent reads the operator's brain state
-> from an EEG stream. It adapts how much detail it surfaces based on whether
-> the operator is at rest or in an active imagery state."
+**SAY:**
+> "Three possible brain states: rest, left imagery, right imagery. When you're at rest, the agent gives the full finding. When you're in an active motor imagery state — meaning you're mentally focused on something — it backs off and gives you a one-liner instead."
 
 ---
 
-## Step 2 — Finding 1: JWT Expiration Bug
+### The Findings and the You: Prompt
 
-The agent calls `get_signal_quality()` then `get_brain_state()` before surfacing
-the first finding.
-
-**What to watch for:**
-
-| Brain state returned | Agent behaviour |
-|---|---|
-| `REST` | Full multi-sentence explanation of the JWT auth bug |
-| `LEFT_IMAGERY` / `RIGHT_IMAGERY` | "You seem focused on something — one thing: expired JWTs are accepted indefinitely." |
-| `LOW_CONFIDENCE` | Agent says it will recheck, calls `get_brain_state()` again |
-
-**Typical terminal output:**
-
+The terminal prints the three findings, then:
 ```
-  [tool] get_signal_quality({})
-  [result] {"snr": 7.2, "artifact_ratio": 0.12, "epoch_count": 14}
-
-  [tool] get_brain_state({"confidence_threshold": 0.65})
-  [result] {"state": "REST", "confidence": 0.71, "timestamp": "2026-06-14T...Z"}
-
-Agent: The authentication middleware doesn't validate JWT expiration. An attacker
-who captures a valid token retains access indefinitely — even after a password
-change or logout. Recommendation: check `exp` claim on every request, and
-enforce a short max-lifetime (e.g. 15 min) with refresh-token rotation.
+You: _
 ```
 
-**Talking point:**
-> "SNR 7.2, artifact ratio 12% — clean signal. State is REST at 71% confidence,
-> above our 65% threshold, so the agent surfaces the full finding."
+**[ACTION]** Pause for one beat, then type:
+```
+let's work through these
+```
+**[ACTION]** Press Enter.
+
+**SAY:** *(say this as you type, naturally)*
+> "Now I'm sending the opening message. The findings are passed along with it — the agent knows what it needs to review."
 
 ---
 
-## Step 3 — Finding 2: SQL Injection
+### Claude Starts Streaming
 
-Same gate pattern. If the model returns `LEFT_IMAGERY` here it's a good demo
-moment — the agent withholds detail deliberately.
+The terminal prints:
+```
 
-**Ideal narration:**
-> "The operator's brain state shifted — motor imagery detected. The agent gives
-> just the headline so we don't break focus, and will expand when the state
-> returns to rest."
+Claude: 
+```
+and text begins appearing token by token.
 
----
+**SAY:**
+> "Claude is streaming its response now. Watch the tool calls that come next."
 
-## Step 4 — Finding 3: Cache TTL
-
-Third finding. By this point the buffer has the most epochs (highest confidence).
-
-**Look for `epoch_count` going up** across the three rounds — it shows the pipeline
-accumulating real-time data.
+**[ACTION]** Point at (or gesture toward) the tool blocks as they appear.
 
 ---
 
-## Step 5 — End of Session
+### First Tool Call Block
 
-The agent prints its final turn and exits cleanly (no Ctrl-C needed).
+```
+── tool: get_signal_quality ──────────────────────────────
+  result: {"snr": 7.2, "artifact_ratio": 0.12, "epoch_count": 14}
+
+── tool: get_brain_state ─────────────────────────────────
+  input:  {"confidence_threshold": 0.65}
+  result: {"state": "REST", "confidence": 0.71, "timestamp": "...Z"}
+```
+
+**SAY:**
+> "Signal-to-noise ratio 7.2, artifact ratio 12 percent — clean signal. Brain state decoded as REST at 71 percent confidence, which is above our 65 percent threshold. So the agent will surface the full finding."
+
+**[ACTION]** Glance briefly at the RIGHT terminal (thinking log) to show it's active.
+
+**SAY:**
+> "Over on the right you can see Claude's extended thinking — the raw reasoning before it decides what to say."
 
 ---
 
-## Troubleshooting
+### Claude Surfaces Finding 1
 
-| Symptom | Fix |
+```
+────────────────────────────────────────────────────────────
+
+Claude: 
+```
+Text streams in.
+
+**SAY:** *(while the text streams, speak naturally, do not read it aloud)*
+> "Full detail. The agent is treating this as a teachable moment because the signal says you're available to absorb it."
+
+**[ACTION]** Wait for Claude to finish. Let the text render completely.
+
+---
+
+### Finding 2 (the adaptation moment — adapt your narration to what the tool returns)
+
+**If `get_brain_state` returns `REST`:**
+
+**SAY:**
+> "Still at rest. Full finding again."
+
+**If `get_brain_state` returns `LEFT_IMAGERY` or `RIGHT_IMAGERY`:**
+
+**SAY:**
+> "State shifted — motor imagery. The agent detected that and pulled back. One sentence instead of a paragraph. That is the adaptation in action."
+
+**[ACTION]** Pause after Claude's response so the viewer can read it.
+
+**If `get_brain_state` returns `LOW_CONFIDENCE`:**
+
+**SAY:**
+> "Confidence was below threshold — the agent is rechecking before it decides. That is the uncertainty gate working."
+
+---
+
+### Finding 3
+
+**SAY:**
+> "Third finding. Notice the `epoch_count` in the signal quality result — it has been climbing since we started. The pipeline has been running the whole time, continuously updating the buffer."
+
+**[ACTION]** Point at the epoch_count value in the tool result.
+
+---
+
+### Close
+
+The agent finishes and the shell prompt returns.
+
+**SAY:**
+> "And that's it. The whole thing runs locally — EEG pipeline, decoder, and agent loop. The two tool calls, `get_signal_quality` and `get_brain_state`, are standard MCP tool calls. Any compatible agent can use them. The code reviewer is just the simplest demo."
+
+**[ACTION]** Stop recording.
+
+---
+
+## If Something Goes Wrong Mid-Recording
+
+| What you see | What to say | What to do |
+|---|---|---|
+| `LOW_CONFIDENCE` on every finding | "The decoder is uncertain — confidence is under threshold each time. It rechecks and surfaces anyway." | Nothing. Let it run. |
+| Thinking log stays empty | Nothing — don't mention it. | The model fell back to standard mode. The demo still works. |
+| `Signal noisy — take a breath, I'll wait.` | "SNR dropped below the noise floor — the agent is waiting rather than surfacing a finding on a bad signal." | Wait; it will re-check automatically next turn. |
+| Long pause between turns | Pause your narration naturally. | API latency. Do not comment on it unless it exceeds 15 seconds. |
+| Python error on startup | Stop recording. | Check `.env` has `ANTHROPIC_API_KEY` and `checkpoints/eegnet.pt` exists. |
+
+---
+
+## Timing Guide
+
+| Segment | Target time |
 |---|---|
-| `LOW_CONFIDENCE` every turn | Normal if subject 86's run 4 is ambiguous; the agent rechecks once then surfaces anyway |
-| `snr < 3` warning | Rare with recorded data; if it happens the agent says "Signal noisy — take a breath" and skips that finding round |
-| `ModuleNotFoundError: dotenv` | `pip install python-dotenv` |
-| `AuthenticationError` | Check `ANTHROPIC_API_KEY` in `.env` is valid |
-| Hangs at "Waiting 3s" | EEG data download in progress (first run); wait ~30 s |
+| Opening + pipeline startup | 15-20 s |
+| Finding 1 (tool calls + response) | 25-35 s |
+| Finding 2 (the adaptation moment) | 20-25 s |
+| Finding 3 + close | 20-25 s |
+| **Total** | **80-105 s** |
 
----
-
-## Recording Tips
-
-- Run once dry before recording so MNE data is cached.
-- Zoom terminal to show both `[tool]` lines and `Agent:` text in frame.
-- No need to narrate every tool call line — pause there, let it render, then narrate the `Agent:` output.
-- Trim to the first complete finding + one state-adaptation moment for a punchy 60 s cut.
+If you want a shorter cut, trim after Finding 2. The adaptation moment (Finding 2 with imagery state) is the most important beat — that is the one to keep.
