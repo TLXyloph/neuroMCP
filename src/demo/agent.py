@@ -74,7 +74,22 @@ def execute_tool(name: str, inputs: dict) -> dict:
     raise ValueError(f"Unknown tool: {name}")
 
 
-def run_agentic_loop() -> None:
+def _print_banner(subject: int, run: int) -> None:
+    w = 60
+    print("\n" + "=" * w)
+    print("NeuroMCP Demo — Focus-Gated Code Review")
+    print(f"Model : EEGNet + MC Dropout  (N=50 passes)")
+    print(f"Subject: {subject}  |  Run: {run}  |  Classes: REST / LEFT / RIGHT")
+    print("-" * w)
+    print("Brain states")
+    print("  REST           -> full finding detail")
+    print("  LEFT/RIGHT     -> one-sentence summary (operator is focused)")
+    print("  LOW_CONFIDENCE -> agent rechecks before surfacing")
+    print("=" * w + "\n")
+
+
+def run_agentic_loop(subject: int, run: int) -> None:
+    _print_banner(subject, run)
     client = anthropic.Anthropic()
     messages = [
         {
@@ -85,10 +100,6 @@ def run_agentic_loop() -> None:
             ),
         }
     ]
-
-    print("\n" + "=" * 60)
-    print("NeuroMCP Demo — Focus-Gated Code Review")
-    print("=" * 60 + "\n")
 
     while True:
         response = client.messages.create(
@@ -136,7 +147,7 @@ def main() -> None:
     print("Waiting 3s for buffer to fill...")
     time.sleep(3.0)
 
-    run_agentic_loop()
+    run_agentic_loop(args.subject, args.run)
 
 
 if __name__ == "__main__":
