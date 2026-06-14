@@ -15,29 +15,28 @@ An MCP server that exposes decoded EEG brain signals as structured tool calls fo
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        MCP Server                           │
-│   get_brain_state() → {state, confidence, timestamp}        │
-│   get_signal_quality() → {snr, artifact_ratio, epoch_count} │
-└────────────────────┬────────────────────────────────────────┘
-                     │ reads from
-┌────────────────────▼────────────────────────────────────────┐
-│                    EpochBuffer                              │
-│   deque(maxlen=10) + threading.Lock                         │
-│   .push(epoch)  .latest()  .stats()                         │
-└────────────────────┬────────────────────────────────────────┘
-                     │ writes to
-┌────────────────────▼────────────────────────────────────────┐
-│                  Signal Pipeline                            │
-│   PlaybackThread → sample buffer → bandpass (8–30 Hz)      │
-│   → artifact rejection → EpochBuffer                        │
-└─────────────────────────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│                    Neural Decoder                           │
-│   EEGNet + Monte Carlo Dropout (N=50) → mean + variance     │
-│   States: LEFT_IMAGERY | RIGHT_IMAGERY | REST               │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                           MCP Server                                 │
+│                                                                      │
+│  get_signal_quality() ──reads──▶ EpochBuffer.stats()                 │
+│                                                                      │
+│  get_brain_state() ────reads──▶ EpochBuffer.latest()                 │
+│                      └──runs──▶ Neural Decoder                       │
+│                                  EEGNet + MC Dropout (N=50)          │
+│                                  → confidence + state                │
+└──────────────────────────────────┬───────────────────────────────────┘
+                                   │ reads from
+┌──────────────────────────────────▼───────────────────────────────────┐
+│                            EpochBuffer                               │
+│   deque(maxlen=10) + threading.Lock                                  │
+│   .push(epoch)  .latest()  .stats()                                  │
+└──────────────────────────────────┬───────────────────────────────────┘
+                                   │ written to by
+┌──────────────────────────────────▼───────────────────────────────────┐
+│                          Signal Pipeline                             │
+│   PlaybackThread → sample queue → bandpass (8–30 Hz)                │
+│   → artifact rejection → EpochBuffer.push()                         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -86,9 +85,11 @@ The pipeline thread reads from the sample queue, applies windowing, filtering, a
 
 **EEGNet** (Lawhern et al. 2018): depthwise + separable convolutions. Input shape: `(64 channels, 160 samples)` per epoch. ~2,500 parameters.
 
-**Monte Carlo Dropout:** keep dropout active at inference, run N=50 stochastic forward passes, return `mean` (predicted state) and `variance` (uncertainty) across passes. The variance is the calibrated confidence the agent uses.
+**Monte Carlo Dropout:** keep dropout active at inference, run N=50 stochastic forward passes, collect N softmax vectors. From these:
+- `confidence` = mean softmax probability of the winning class across passes (what the API exposes)
+- `variance` = variance of that probability across passes (internal signal for uncertainty quality)
 
-Standard EEGNet softmax scores are not calibrated probabilities — a 90% score from a miscalibrated model is meaningless. MC dropout variance is an honest uncertainty estimate that degrades gracefully with signal noise.
+Standard EEGNet softmax scores are not calibrated probabilities — a 90% score from a miscalibrated model is meaningless. The mean over N stochastic passes produces a calibrated probability; high variance across passes signals unreliable predictions even when the mean looks confident.
 
 ---
 
@@ -106,13 +107,23 @@ Reads from `EpochBuffer.stats()`. No inference. Fast.
 ```
 
 ### `get_brain_state(confidence_threshold: float = 0.7)`
-Runs N=50 MC dropout passes on `EpochBuffer.latest()`. Returns decoded state only if confidence exceeds threshold; otherwise returns `"LOW_CONFIDENCE"`.
+Runs N=50 MC dropout passes on `EpochBuffer.latest()`. Returns decoded state only if confidence exceeds threshold; otherwise state is `"LOW_CONFIDENCE"`.
 
+High confidence:
 ```json
 {
   "state": "LEFT_IMAGERY",
   "confidence": 0.84,
   "timestamp": "2026-06-13T20:14:00Z"
+}
+```
+
+Below threshold:
+```json
+{
+  "state": "LOW_CONFIDENCE",
+  "confidence": 0.41,
+  "timestamp": "2026-06-13T20:14:05Z"
 }
 ```
 
@@ -175,7 +186,7 @@ neuromcp/
 │   ├── preprocessing/
 │   │   ├── buffer.py          # EpochBuffer — thread-safe circular buffer (NEW)
 │   │   ├── pipeline.py        # bandpass filter, epoching, artifact rejection
-│   │   └── streaming.py       # PlaybackThread, sample queue, SNR computation
+│   │   └── streaming.py       # PlaybackThread, sample queue
 │   ├── models/
 │   │   ├── eegnet.py          # EEGNet architecture in PyTorch
 │   │   ├── mc_dropout.py      # MC dropout wrapper, N-pass inference
@@ -212,7 +223,7 @@ neuromcp/
 2. Download PhysioNet EEGBCI via `mne.datasets.eegbci.load_data`
 3. Implement `buffer.py`: `EpochBuffer` with `push`, `latest`, `stats`
 4. Implement `pipeline.py`: bandpass filter 8–30 Hz, epoch around task events, artifact rejection (peak-to-peak amplitude threshold)
-5. Implement `streaming.py`: `PlaybackThread` at 160 Hz, sample queue, SNR computation
+5. Implement `streaming.py`: `PlaybackThread` at 160 Hz, sample queue — SNR computation belongs in `buffer.py` (`stats()` method), not here
 6. Validate in `01_preprocessing.ipynb`: PSD plots, confirm motor imagery epochs look correct
 
 **Gate:** pipeline runs on a PhysioNet subject, produces clean epochs in `EpochBuffer`, `stats()` returns sensible SNR.
