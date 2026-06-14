@@ -45,3 +45,54 @@ def test_eegnet_deterministic_in_eval_mode():
         out1 = model(x)
         out2 = model(x)
     assert torch.allclose(out1, out2)
+
+
+from unittest.mock import patch
+import os
+from src.models.mc_dropout import MCDropoutDecoder, STATES
+
+
+def _save_dummy_checkpoint(path: str) -> None:
+    model = EEGNet()
+    torch.save(model.state_dict(), path)
+
+
+def test_mc_dropout_states_constant():
+    assert STATES == ["REST", "LEFT_IMAGERY", "RIGHT_IMAGERY"]
+
+
+def test_mc_dropout_returns_valid_state(tmp_path):
+    ckpt = str(tmp_path / "model.pt")
+    _save_dummy_checkpoint(ckpt)
+    decoder = MCDropoutDecoder(ckpt, n_passes=5, device="cpu")
+    epoch = np.random.randn(64, 160).astype(np.float32)
+    state, confidence = decoder.predict(epoch)
+    assert state in STATES + ["LOW_CONFIDENCE"]
+
+
+def test_mc_dropout_confidence_in_range(tmp_path):
+    ckpt = str(tmp_path / "model.pt")
+    _save_dummy_checkpoint(ckpt)
+    decoder = MCDropoutDecoder(ckpt, n_passes=5, device="cpu")
+    epoch = np.random.randn(64, 160).astype(np.float32)
+    _, confidence = decoder.predict(epoch)
+    assert 0.0 <= confidence <= 1.0
+
+
+def test_mc_dropout_runs_n_passes(tmp_path):
+    """Verify N stochastic passes actually differ (dropout is active)."""
+    ckpt = str(tmp_path / "model.pt")
+    _save_dummy_checkpoint(ckpt)
+    decoder = MCDropoutDecoder(ckpt, n_passes=10, device="cpu")
+
+    epoch = np.random.randn(64, 160).astype(np.float32)
+    x = torch.tensor(epoch).unsqueeze(0)
+
+    passes = []
+    for _ in range(10):
+        with torch.no_grad():
+            passes.append(decoder._model(x).numpy())
+
+    # Not all passes should be identical (dropout is on)
+    all_same = all(np.allclose(passes[0], p) for p in passes[1:])
+    assert not all_same
