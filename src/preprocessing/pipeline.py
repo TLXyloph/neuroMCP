@@ -47,6 +47,11 @@ def load_and_epoch_subject(subject: int) -> tuple[np.ndarray, np.ndarray]:
             for f in raw_fnames]
     raw = mne.concatenate_raws(raws)
     eegbci.standardize(raw)
+    # A handful of PhysioNet subjects (S088, S089, S092, S100, S104) are recorded
+    # at 128 Hz rather than 160 Hz, which yields 128-sample epochs that can't be
+    # batched with the rest. Resample everyone to 160 Hz for a uniform epoch length.
+    if raw.info["sfreq"] != 160.0:
+        raw.resample(160.0, npad="auto", verbose=False)
     raw.filter(8.0, 30.0, method="iir", verbose=False)
 
     events, event_id = mne.events_from_annotations(raw, verbose=False)

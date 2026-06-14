@@ -21,6 +21,9 @@ def load_dataset(subjects: list[int]) -> tuple[np.ndarray, np.ndarray]:
     for subj in subjects:
         try:
             X, y = load_and_epoch_subject(subj)
+            if len(y) == 0:
+                print(f"  Subject {subj}: SKIP (no epochs survived rejection)")
+                continue
             Xs.append(X)
             ys.append(y)
             print(f"  Subject {subj}: {len(y)} epochs")
