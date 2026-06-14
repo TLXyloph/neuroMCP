@@ -50,3 +50,48 @@ def test_code_to_class_mapping():
     assert CODE_TO_CLASS[1] == 0  # T0 → REST
     assert CODE_TO_CLASS[2] == 1  # T1 → LEFT
     assert CODE_TO_CLASS[3] == 2  # T2 → RIGHT
+
+
+import queue
+import time
+from src.preprocessing.buffer import EpochBuffer
+from src.preprocessing.streaming import PlaybackThread, PipelineThread
+
+
+def test_playback_thread_enqueues_samples():
+    """PlaybackThread should put chunks into the queue."""
+    rng = np.random.default_rng(1)
+    data = rng.random((64, 3200)) * 50e-6  # 20s of fake EEG
+    sfreq = 160.0
+    sample_q = queue.Queue(maxsize=5000)
+
+    thread = PlaybackThread(data, sfreq, sample_q, chunk_size=16)
+    thread.start()
+    time.sleep(0.3)  # let it push some chunks
+    thread.stop()
+    thread.join(timeout=1.0)
+
+    assert not sample_q.empty()
+
+
+def test_pipeline_thread_fills_epoch_buffer():
+    """PipelineThread should write clean epochs to EpochBuffer."""
+    rng = np.random.default_rng(2)
+    # 20s of clean small-amplitude EEG (below artifact threshold)
+    data = rng.random((64, 3200)) * 10e-6
+    sfreq = 160.0
+    sample_q = queue.Queue(maxsize=5000)
+    epoch_buf = EpochBuffer()
+
+    # Pre-fill the queue so pipeline has immediate data
+    chunk_size = 16
+    for i in range(0, data.shape[1], chunk_size):
+        sample_q.put(data[:, i:i + chunk_size])
+
+    pipeline = PipelineThread(sample_q, epoch_buf, sfreq=sfreq)
+    pipeline.start()
+    time.sleep(0.5)
+    pipeline.stop()
+    pipeline.join(timeout=1.0)
+
+    assert epoch_buf.stats()["epoch_count"] > 0
